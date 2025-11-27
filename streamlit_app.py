@@ -38,17 +38,14 @@ def get_best_match(query):
 def generate_answer(query):
     try:
         # --- HYBRID KEY LOGIC ---
-        # 1. Try to get key from Cloud Secrets (Works on Streamlit Cloud)
         try:
             my_key = st.secrets["GEMINI_KEY"]
         except:
-            # 2. If running locally (Your Computer), use this Backup Key
-            # 👇👇👇 PASTE YOUR NEW KEY BELOW INSIDE THE QUOTES 👇👇👇
+            # Replace with your actual key if testing locally without secrets.toml
             my_key = "AIzaSyAG_ezUX44lgpqAiuaJ_icy4s_cfiM3o9c"
         
         genai.configure(api_key=my_key)
         
-        # Using 2.5-flash as requested
         model = genai.GenerativeModel('models/gemini-2.5-flash')
 
         # A. Retrieve Context
@@ -63,8 +60,12 @@ def generate_answer(query):
         if score > 0.35:
             # High match? Use Database
             prompt = f"""
-            You are a helpful store assistant.
-            Use the CONTEXT and HISTORY to answer.
+            You are a helpful multi-lingual store assistant.
+            
+            INSTRUCTIONS:
+            1. Detect the language of the USER QUESTION.
+            2. Answer the question using the CONTEXT provided below.
+            3. Your answer MUST be in the SAME LANGUAGE as the USER QUESTION.
             
             CONTEXT: {best_text}
             HISTORY: {history_text}
@@ -73,9 +74,13 @@ def generate_answer(query):
         else:
             # Low match? Just Chit-Chat
             prompt = f"""
-            You are a friendly customer service AI. 
-            The user is saying hello or asking a general question.
-            Be polite and helpful. Do NOT make up store info.
+            You are a friendly multi-lingual customer service AI. 
+            
+            INSTRUCTIONS:
+            1. Detect the language of the USER SAID text.
+            2. Reply politely in the SAME LANGUAGE.
+            3. If the user says hello, say hello back in their language.
+            4. Do NOT make up store info.
             
             HISTORY: {history_text}
             USER SAID: {query}
