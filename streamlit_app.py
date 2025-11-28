@@ -3,9 +3,16 @@ import google.generativeai as genai
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
+import requests
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Smart Store AI", page_icon="🤖")
+st.set_page_config(page_title="Store Support", page_icon="🛍️")
+
+# 👇👇👇 CONFIGURATION 👇👇👇
+DOLIBARR_API_KEY = "kZbDKDivuFZQAAz"
+# Try removing 'index.php' if your server uses clean URLs, but keep it for now.
+DOLIBARR_API_URL = "http://localhost/dolibarr/htdocs/api/index.php" 
+# 👆👆👆👆👆👆👆👆👆👆👆👆
 
 @st.cache_resource
 def load_models():
@@ -13,7 +20,7 @@ def load_models():
 
 embedding_model = load_models()
 
-# --- 2. DATA (Your Knowledge Base) ---
+# --- 2. KNOWLEDGE BASE ---
 if "knowledge_base" not in st.session_state:
     st.session_state.knowledge_base = [
         {"id": 1, "content": "We ship all domestic orders via FedEx. Delivery takes 3-5 business days."},
@@ -23,68 +30,111 @@ if "knowledge_base" not in st.session_state:
         {"id": 5, "content": "Our store is open Mon-Fri from 9 AM to 5 PM EST."}
     ]
 
-# --- 3. VECTORIZATION (Retrieval) ---
-def get_best_match(query):
-    corpus = [d['content'] for d in st.session_state.knowledge_base]
-    # Re-encode corpus each time to catch new sidebar additions
-    corpus_embeddings = embedding_model.encode(corpus)
-    query_embedding = embedding_model.encode([query])
-    
-    scores = cosine_similarity(query_embedding, corpus_embeddings)[0]
-    best_idx = np.argmax(scores)
-    return corpus[best_idx], scores[best_idx]
-
-# --- 4. GENERATION (The Brain) ---
-def generate_answer(query):
+# --- 3. HELPER: AI EXTRACTOR ---
+def extract_product_name_with_ai(user_query):
     try:
-        # --- HYBRID KEY LOGIC ---
         try:
             my_key = st.secrets["GEMINI_KEY"]
         except:
-            # Replace with your actual key if testing locally without secrets.toml
-            my_key = "AIzaSyAG_ezUX44lgpqAiuaJ_icy4s_cfiM3o9c"
+            my_key = "AIzaSy..." # Fallback key if needed
+            
+        genai.configure(api_key=my_key)
+        model = genai.GenerativeModel('models/gemini-2.5-flash')
+        
+        prompt = f"""
+        Extract the CORE product name or ID from the user's sentence.
+        Rules:
+        1. Remove adjectives like "cool", "nice", "my", "the", "this", "on stock".
+        2. Return ONLY the product name.
+        
+        User sentence: "{user_query}"
+        """
+        response = model.generate_content(prompt)
+        clean_name = response.text.strip()
+        st.toast(f"🤖 AI extracted: '{clean_name}'")
+        return clean_name
+    except:
+        return user_query
+
+# --- 4. DOLIBARR TOOL (Deep Debug) ---
+def check_dolibarr_stock(product_keyword):
+    headers = {"DOLAPIKEY": DOLIBARR_API_KEY}
+    clean_keyword = product_keyword.replace('"', '').replace("'", "").strip()
+    
+    # URL Construct
+    url = f"{DOLIBARR_API_URL}/products"
+    
+    # Params
+    sql = f"(t.ref:like:'%{clean_keyword}%') OR (t.label:like:'%{clean_keyword}%')"
+    params = {
+        "sqlfilters": sql,
+        "limit": 5
+    }
+    
+    # DEBUG: Show connection details on screen
+    st.info(f"📡 **CONNECTING...**")
+    st.write(f"**URL:** `{url}`")
+    st.write(f"**Key:** `{DOLIBARR_API_KEY[:5]}...`")
+    st.write(f"**Filter:** `{sql}`")
+    
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        
+        # DEBUG: Show Status Code
+        st.write(f"**Status Code:** `{response.status_code}`")
+        
+        if response.status_code == 200:
+            try:
+                products = response.json()
+                # DEBUG: Show Raw JSON
+                st.expander("View Raw JSON Data").json(products)
+                
+                if isinstance(products, list) and len(products) > 0:
+                    result_text = "Found in Dolibarr:\n"
+                    for p in products:
+                        result_text += f"- {p['label']} (Ref: {p['ref']}) | Stock: {p['stock_reel']}\n"
+                    return result_text
+                else:
+                    return f"Search successful (200 OK), but list was empty for '{clean_keyword}'."
+            except Exception as json_err:
+                return f"❌ JSON Error: Could not read response. {str(json_err)}"
+                
+        elif response.status_code == 404:
+             return f"❌ Error 404: The URL is wrong. Verify 'api/index.php'"
+        else:
+            return f"❌ API Error: {response.status_code} - {response.text}"
+            
+    except Exception as e:
+        # THIS IS THE MOST IMPORTANT PART
+        return f"🔥 CRITICAL CONNECTION ERROR: {type(e).__name__} - {str(e)}"
+
+# --- 5. GENERATION ---
+def generate_answer(query):
+    try:
+        try:
+            my_key = st.secrets["GEMINI_KEY"]
+        except:
+            my_key = "AIzaSy..." 
         
         genai.configure(api_key=my_key)
-        
         model = genai.GenerativeModel('models/gemini-2.5-flash')
 
-        # A. Retrieve Context
-        best_text, score = get_best_match(query)
-        
-        # B. Build History (Memory of last 5 messages)
-        history_text = ""
-        for msg in st.session_state.messages[-5:]:
-            history_text += f"{msg['role']}: {msg['content']}\n"
+        if any(k in query.lower() for k in ["stock", "price", "check"]):
+            product_keyword = extract_product_name_with_ai(query)
+            erp_data = check_dolibarr_stock(product_keyword)
+            
+            # Show the raw error result in a big red box
+            if "❌" in erp_data or "🔥" in erp_data:
+                st.error(erp_data)
 
-        # C. Decision Logic (Smart Router)
-        if score > 0.35:
-            # High match? Use Database
             prompt = f"""
-            You are a helpful multi-lingual store assistant.
-            
-            INSTRUCTIONS:
-            1. Detect the language of the USER QUESTION.
-            2. Answer the question using the CONTEXT provided below.
-            3. Your answer MUST be in the SAME LANGUAGE as the USER QUESTION.
-            
-            CONTEXT: {best_text}
-            HISTORY: {history_text}
-            USER QUESTION: {query}
+            User asked: "{query}"
+            DATA FROM ERP: {erp_data}
+            Answer politely.
             """
         else:
-            # Low match? Just Chit-Chat
-            prompt = f"""
-            You are a friendly multi-lingual customer service AI. 
-            
-            INSTRUCTIONS:
-            1. Detect the language of the USER SAID text.
-            2. Reply politely in the SAME LANGUAGE.
-            3. If the user says hello, say hello back in their language.
-            4. Do NOT make up store info.
-            
-            HISTORY: {history_text}
-            USER SAID: {query}
-            """
+            best_text, _ = get_best_match(query)
+            prompt = f"Context: {best_text}\nQuestion: {query}\nAnswer politely."
 
         response = model.generate_content(prompt)
         return response.text
@@ -92,27 +142,11 @@ def generate_answer(query):
     except Exception as e:
         return f"Error: {str(e)}"
 
-# --- 5. UI (Sidebar & Chat) ---
-
-# Sidebar for Training
-with st.sidebar:
-    st.header("🧠 Teach the Bot")
-    with st.form("train_form"):
-        new_topic = st.text_input("Topic (Optional)")
-        new_content = st.text_area("Fact (e.g. 'We sell red shoes')")
-        if st.form_submit_button("Add to Brain"):
-            if new_content:
-                st.session_state.knowledge_base.append({
-                    "id": len(st.session_state.knowledge_base) + 1, 
-                    "content": new_content
-                })
-                st.success("Memory Updated!")
-
-# Main Chat Window
-st.title("🤖 Smart Assistant")
+# --- 6. UI ---
+st.title("🛍️ Store Support ")
 
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": "Hello! How can I help you?"}]
+    st.session_state.messages = [{"role": "assistant", "content": "Hello! how can I help you today."}]
 
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
@@ -122,7 +156,7 @@ if prompt := st.chat_input("Ask me..."):
     st.chat_message("user").write(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
+        with st.spinner("Checking..."):
             response = generate_answer(prompt)
             st.write(response)
             
