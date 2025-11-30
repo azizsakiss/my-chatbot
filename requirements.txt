@@ -2,4 +2,3 @@ streamlit
 google-generativeai
 numpy
 requests
-
