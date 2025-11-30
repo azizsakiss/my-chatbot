@@ -8,7 +8,7 @@ st.set_page_config(page_title="Store Support", page_icon="🛍️")
 
 # 👇👇👇 CONFIGURATION 👇👇👇
 DOLIBARR_API_KEY = "kZbDKDivuFZQAAz"
-DOLIBARR_API_URL = "http://localhost/dolibarr/htdocs/api/index.php" 
+DOLIBARR_API_URL = "https://unplacatory-jenine-unrasped.ngrok-free.dev/dolibarr/htdocs/api/index.php"
 # 👆👆👆👆👆👆👆👆👆👆👆👆
 
 # --- 2. KNOWLEDGE BASE ---
